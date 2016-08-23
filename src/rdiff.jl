@@ -315,6 +315,16 @@ end
 evaluate!(g::ExGraph, name::Symbol) = evaluate!(g, g.idx[name])
 
 
+"""
+If expression contains a tensor that can't be reduced to simple vectors or
+has such derivatives, replace expression with the corresponding equivalent in
+Eistein notation.
+"""
+function expand_tensors!(g::ExGraph)
+    
+end
+
+
 ## forward pass
 
 """Forward pass of differentiation"""

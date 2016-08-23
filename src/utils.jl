@@ -38,7 +38,7 @@ end
 """Flatten vector of vectors in-place"""
 function flatten!(b::Vector, a::Vector)
     for x in a
-        if isa(x, Array)
+        if isa(x, AbstractArray)
             flatten!(b, x)
         else
             push!(b, x)
@@ -48,8 +48,21 @@ function flatten!(b::Vector, a::Vector)
 end
 
 """Flatten vector of vectors"""
-flatten(a::Vector) = flatten!(eltype(a)[], a)
+flatten(a::Vector) = flatten!([], a)
 flatten{T}(::Type{T}, a::Vector) = convert(Vector{T}, flatten(a))
+
+
+function countdict{T}(a::AbstractArray{T})
+    counts = Dict{T, Int}()
+    for x in a
+        if haskey(counts, x)
+            counts[x] += 1
+        else
+            counts[x] = 1
+        end
+    end
+    return counts
+end
 
 
 ## package-specific stuff

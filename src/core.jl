@@ -14,5 +14,7 @@ include("simplify.jl")
 include("ops.jl")
 include("funexpr.jl")
 include("diff_rules.jl")
+include("einstein.jl")
+include("tensor.jl")
 include("rdiff.jl")
 

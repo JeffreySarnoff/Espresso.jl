@@ -13,8 +13,19 @@ typealias OpName Union{Symbol, Expr}
 @runonce type ExH{H}
     head::Symbol
     args::Vector
-    typ::Any
 end
 
-to_exh(ex::Expr) = ExH{ex.head}(ex.head, ex.args, ex.typ)
-to_expr(exh::ExH) = Expr(exh.head, exh.args..., exh.typ)
+to_exh(ex::Expr) = ExH{ex.head}(ex.head, ex.args)
+to_expr(exh::ExH) = Expr(exh.head, exh.args...)
+
+@runonce type ExCall{Op}
+    head::Symbol
+    args::Vector
+end
+
+to_excall(ex::Expr) = ExCall{ex.args[1]}(ex.head, ex.args)
+to_expr(exc::ExCall) = Expr(exc.head, exc.args...)
+
+
+
+
