@@ -61,7 +61,7 @@
 # -------
 #
 # Here's an example of this process (and some tips on how to debug it).
-# 
+#
 # Suppose we have expression:
 #
 #     ex = :(z = x1*x2 + sin(x1))
@@ -73,7 +73,7 @@
 #     forward_pass(g, ex)
 #
 # After this our graph looks like:
-# 
+#
 #   ExGraph
 #     ExNode{:input}(:x1,:($(Expr(:input, :x1))),1)
 #     ExNode{:input}(:x2,:($(Expr(:input, :x2))),1)
@@ -112,7 +112,7 @@
 #     ...
 #
 # To see how it works, consider finding derivative `dz/dx1` at intermediate
-# node :tmp1. Note, that in our example `tmp = x1 * x2`.
+# node :tmp1. Note, that in our example `tmp1 = x1 * x2`.
 #
 # 1) by the time of computing this derivative we already know that
 #    `dz/dtmp1 == 1.0`
@@ -135,8 +135,18 @@
 
 @runonce type ExNode{H}
     name::Symbol                   # name of a variable
+    idxs::Vector{Symbol}           # receiver indexes (for tensors)
     ex::Any                        # simple expression that produces `name`
-    val::Any                       # value if any (e.g. for consts)
+    iex::Any                       # indexed version of ex (for tensors)
+    val::Any                       # value if any
+end
+
+function Base.show{H}(io::IO, node::ExNode{H})
+    lhs = isempty(node.idxs) ? node.name : Expr(:ref, node.name, node.idxs...)
+    ex = node.iex != nothing ? node.iex : node.ex
+    rhs = H == :(=) ? node.iex.args[1] : node.iex  # TODO: handle not indexed
+    val = isa(node.val, AbstractArray) ? "<$(typeof(node.val))>" : node.val
+    print(io, "ExNode{:$H}($lhs=$rhs,val=$val)")
 end
 
 to_expr(node::ExNode) = node.ex
@@ -177,16 +187,17 @@ end
 ## deps
 
 """Get symbols of dependenices of this node"""
-deps(node::ExNode{:input}) = Symbol[]
-deps(node::ExNode{:constant}) = Symbol[]
-deps(node::ExNode{:(=)}) = [node.ex.args[2]]
-deps(node::ExNode{:call}) = node.ex.args[2:end]
+dependencies(node::ExNode{:input}) = Symbol[]
+dependencies(node::ExNode{:constant}) = Symbol[]
+dependencies(node::ExNode{:(=)}) = [node.ex.args[1]]
+dependencies(node::ExNode{:call}) = node.ex.args[2:end]
 
 
 ## special expressions
 
 constant(x) = Expr(:constant, x)
 input(x, val) = Expr(:input, x, val)
+assign(x) = Expr(:(=), x)
 
 
 ## expand expressions
@@ -217,16 +228,22 @@ end
 ## addnode!
 
 """
-Add new node to the graph.
-NOTE: `ex` should be SIMPLE expression already!
+Add new symbolic node to the graph. Expression should be simple, e.g.
+nested calls or blocks are not allowed.
 """
-function addnode!(g::ExGraph, name::Symbol, ex::Symbolic, val::Any)    
-    node = ExNode{ex.head}(name, ex, val)
+function addnode!(g::ExGraph, name::Symbol, idxs::Vector{Symbol},
+                  ex::Symbolic, iex::Any, val::Any)
+    node = ExNode{ex.head}(name, idxs, ex, iex, val)
     push!(g.tape, node)
     g.idx[name] = node
-    g.expanded[name] = expand_expr(g.expanded, ex)
+    # g.expanded[name] = expand_expr(g.expanded, ex)
     return name
 end
+
+addnode!(g::ExGraph, name::Symbol, ex::Symbolic, val::Any) =
+    addnode!(g, name, Symbol[], ex, nothing, val)
+
+
 
 
 ## parse!
@@ -236,72 +253,97 @@ Parse Julia expression and build ExGraph in-place.
 Return the name of the output variable.
 """
 parse!(g::ExGraph, ex::Expr) = parse!(g, to_exh(ex))
-parse!(g::ExGraph, ::LineNumberNode) = :nil
-parse!(g::ExGraph, s::Symbol) = s
-parse!(g::ExGraph, ref::GlobalRef) = ref
+parse!(g::ExGraph, ::LineNumberNode) = (:nil, Symbol[])
+parse!(g::ExGraph, s::Symbol) = (s, Symbol[])
+parse!(g::ExGraph, gr::GlobalRef) = (gr, Symbol[])
 
 function parse!(g::ExGraph, x::Number)
     name = addnode!(g, genname(g), constant(x), x)
-    return name
+    return name, Symbol[]
 end
 
 function parse!(g::ExGraph, x::AbstractArray)
     name = addnode!(g, genname(g), constant(x), x)
-    return name
+    return name, Symbol[]
 end
 
+split_indexed(name::Symbol) = (name, Symbol[])
+split_indexed(ex::Expr) = (ex.args[1], convert(Vector{Symbol}, ex.args[2:end]))
 
 function parse!(g::ExGraph, ex::ExH{:(=)})
     op = :(=)
     lhs, rhs = ex.args
-    name = lhs
-    dep = parse!(g, rhs)
-    addnode!(g, name, :($name = $dep), nothing)
-    return name
+    name, idxs = split_indexed(lhs)    
+    dep, dep_idxs = parse!(g, rhs)
+    dep_ex = dep
+    dep_iex = Expr(:ref, dep, dep_idxs...)
+    addnode!(g, name, idxs, assign(dep_ex), assign(dep_iex), nothing)
+    return name, Symbol[]
 end
 
 
-function parse!(g::ExGraph, ex::ExH{:call})    
+function parse!(g::ExGraph, ex::ExH{:ref})
+    return ex.args[1], ex.args[2:end]
+end
+
+
+function parse!(g::ExGraph, ex::ExH{:call})
     op = canonical(g.mod, ex.args[1])
-    deps = Symbol[parse!(g, arg) for arg in ex.args[2:end]]
-    name = addnode!(g, genname(g), Expr(:call, op, deps...), nothing)
-    return name
+    deps_idxs = [parse!(g, arg) for arg in ex.args[2:end]]
+    deps = [dep for (dep, idx) in deps_idxs]
+    simple_ex = Expr(:call, op, deps...)
+    if is_indexed(ex)
+        indexed_deps = [Expr(:ref, dep, idxs...) for (dep, idxs) in deps_idxs]
+        iex = Expr(:call, op, indexed_deps...)
+        idxs = forall_indexes(iex)
+        name = addnode!(g, genname(g), idxs, simple_ex, iex, nothing)
+        return name, idxs
+    else
+        idxs = Symbol[]
+        name = addnode!(g, genname(g), idxs, simple_ex, nothing, nothing)
+        return name, idxs
+    end
+    
 end
 
 function parse!(g::ExGraph, ex::ExH{:block})
-    names = Symbol[parse!(g, subex) for subex in ex.args]
-    return names[end]
+    name_idxs = [parse!(g, subex) for subex in ex.args]
+    return name_idxs[end]
 end
 
 function parse!(g::ExGraph, ex::ExH{:body})
-    names = Symbol[parse!(g, subex) for subex in ex.args]
-    return names[end]
+    name_idxs = [parse!(g, subex) for subex in ex.args]
+    return name_idxs[end]
 end
 
 
 ## evaluate!
 
 """
-Evaluate node, i.e. fill its `val` by evaluating node's expression w.r.t.
+Evaluate node, i.e. fill its `val` by evaluating node's expression using
 values of its dependencies.
 """
 evaluate!(g::ExGraph, node::ExNode{:constant}) = node.val
 evaluate!(g::ExGraph, node::ExNode{:input}) = node.val
 
+is_indexed(node::ExNode) = node.iex != nothing
+
 function evaluate!(g::ExGraph, node::ExNode{:(=)})
     if (node.val != nothing) return node.val end
-    dep_node = g.idx[deps(node)[1]]
-    node.val = evaluate!(g, dep_node)
+    dep_node = g.idx[dependencies(node)[1]]
+    if is_indexed(node)
+        ref = Expr(:ref, node.name, node.idxs...)
+        ex = :(@tensor $ref = node.iex)
+    else
+        node.val = evaluate!(g, dep_node)
+    end
     return node.val
 end
 
-# consider all other cases as function calls
 function evaluate!(g::ExGraph, node::ExNode{:call})
     if (node.val != nothing) return node.val end
     # TODO: dep may be a global constant (like π)
-    dep_nodes = [g.idx[dep] for dep in deps(node)]
-    # why this short version doesn't work?
-    # dep_vals = [evaluate!(g, dep_node) for dep_node in dep_nodes]
+    dep_nodes = [g.idx[dep] for dep in dependencies(node)]
     for dep_node in dep_nodes
         evaluate!(g, dep_node)
     end
@@ -313,16 +355,6 @@ function evaluate!(g::ExGraph, node::ExNode{:call})
 end
 
 evaluate!(g::ExGraph, name::Symbol) = evaluate!(g, g.idx[name])
-
-
-"""
-If expression contains a tensor that can't be reduced to simple vectors or
-has such derivatives, replace expression with the corresponding equivalent in
-Eistein notation.
-"""
-function expand_tensors!(g::ExGraph)
-    
-end
 
 
 ## forward pass
@@ -386,7 +418,7 @@ node's dependenices to adjoint dictionary.
 """
 function rev_step!(g::ExGraph, node::ExNode{:(=)}, adj::Dict{Symbol,Any})
     y = node.name
-    x = deps(node)[1]
+    x = dependencies(node)[1]
     adj[x] = adj[y]
 end
 
@@ -400,11 +432,11 @@ end
 
 function rev_step!(g::ExGraph, node::ExNode{:call}, adj::Dict{Symbol,Any})
     y = node.name
-    types = [typeof(g.idx[x].val) for x in deps(node)]
-    for (i, x) in enumerate(deps(node))
+    types = [typeof(g.idx[x].val) for x in dependencies(node)]
+    for (i, x) in enumerate(dependencies(node))
         x_node = g.idx[x]
         op = opname(g.mod, node.ex.args[1])
-        maybe_rule = find_rule(op, types, i)        
+        maybe_rule = find_rule(op, types, i)
         rule = !isnull(maybe_rule) ? get(maybe_rule) : register_rule(op, types, i)
         dydx = apply_rule(rule, to_expr(node))
         dzdy = adj[y]
@@ -423,7 +455,7 @@ end
 function reverse_recursive!(g::ExGraph, curr::Symbol, adj::Dict{Symbol, Any})
     node = g.idx[curr]
     rev_step!(g, node, adj)
-    for dep in deps(node)
+    for dep in dependencies(node)
         reverse_recursive!(g, dep, adj)
     end
 end
@@ -483,4 +515,20 @@ function rdiff(f::Function; xs...)
     ex = sanitize(ex)
     # TODO: map xs to args
     derivs = rdiff(ex; xs...)
+end
+
+
+
+
+
+function main()
+    ex = quote
+        C[i,j] = A[i,k] * B[k,j]
+        D[j,i] = C[i,j]
+    end
+    # ex = :(A[i,k] * B[k,j])
+    g = ExGraph(; A=ones(1,1), B=ones(1,1))
+    parse!(g, ex)
+    evaluate!(g, :D)
+    g
 end

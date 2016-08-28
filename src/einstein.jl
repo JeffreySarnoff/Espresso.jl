@@ -48,6 +48,11 @@ for op in [:+, :-, .+, .-, .*, ./]
 
 end
 
+"""Check if expression contains indexed elements, e.g. x[i]"""
+function is_indexed(ex)
+    return expr_like(ex) && (ex.head == :ref || any(is_indexed, ex.args))
+end
+
 """Collect index names used in expression"""
 function collect_indexes!(idxs::Vector{Symbol}, ex)
     if isa(ex, Expr)  # otherwise ignore
@@ -96,4 +101,4 @@ function forall_and_sum_indexes(ex::Expr)
 end
 
 
-
+forall_indexes(ex::Expr) = forall_and_sum_indexes(ex)[1]
