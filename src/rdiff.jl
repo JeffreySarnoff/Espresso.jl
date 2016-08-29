@@ -273,12 +273,12 @@ split_indexed(ex::Expr) = (ex.args[1], convert(Vector{Symbol}, ex.args[2:end]))
 function parse!(g::ExGraph, ex::ExH{:(=)})
     op = :(=)
     lhs, rhs = ex.args
-    name, idxs = split_indexed(lhs)    
+    name, idxs = split_indexed(lhs)
     dep, dep_idxs = parse!(g, rhs)
     dep_ex = dep
     dep_iex = Expr(:ref, dep, dep_idxs...)
     addnode!(g, name, idxs, assign(dep_ex), assign(dep_iex), nothing)
-    return name, Symbol[]
+    return name, idxs
 end
 
 
@@ -303,7 +303,7 @@ function parse!(g::ExGraph, ex::ExH{:call})
         name = addnode!(g, genname(g), idxs, simple_ex, nothing, nothing)
         return name, idxs
     end
-    
+
 end
 
 function parse!(g::ExGraph, ex::ExH{:block})
@@ -328,12 +328,31 @@ evaluate!(g::ExGraph, node::ExNode{:input}) = node.val
 
 is_indexed(node::ExNode) = node.iex != nothing
 
+
+payload(ex) = (expr_like(ex) && ex.head == :(=)) ? ex.args[1] : ex
+
+
+function tensor_eval_expr(g::ExGraph, node::ExNode)
+    dep_nodes = [g.idx[dep] for dep in dependencies(node)]
+    deps_vals = [(nd.name, nd.val) for nd in dep_nodes]
+    block = Expr(:block)
+    for (dep, val) in deps_vals        
+        push!(block.args, Expr(:(=), dep, val))
+    end
+    ref = Expr(:ref, node.name, node.idxs...)
+    assign_iex = Expr(:(:=), ref, payload(node.iex))
+    push!(block.args, Expr(:macrocall, symbol("@tensor"), assign_iex))
+    return block
+end
+
+
 function evaluate!(g::ExGraph, node::ExNode{:(=)})
     if (node.val != nothing) return node.val end
     dep_node = g.idx[dependencies(node)[1]]
     if is_indexed(node)
-        ref = Expr(:ref, node.name, node.idxs...)
-        ex = :(@tensor $ref = node.iex)
+        evaluate!(g, dep_node)
+        tensor_ex = tensor_eval_expr(g, node)
+        node.val = eval(tensor_ex)
     else
         node.val = evaluate!(g, dep_node)
     end
@@ -347,10 +366,15 @@ function evaluate!(g::ExGraph, node::ExNode{:call})
     for dep_node in dep_nodes
         evaluate!(g, dep_node)
     end
-    op = node.ex.args[1]
-    dep_vals = [dep_node.val for dep_node in dep_nodes]
-    ex = :(($op)($(dep_vals...)))
-    node.val = eval(ex)
+    if is_indexed(node)
+        tensor_ex = tensor_eval_expr(g, node)
+        node.val = eval(tensor_ex)
+    else
+        op = node.ex.args[1]
+        dep_vals = [dep_node.val for dep_node in dep_nodes]
+        ex = :(($op)($(dep_vals...)))
+        node.val = eval(ex)
+    end    
     return node.val
 end
 
@@ -365,27 +389,6 @@ function forward_pass(g::ExGraph, ex::Any)
     evaluate!(g, g.tape[end].name)
     return g
 end
-
-## ## constant substitution
-## function constants(g::ExGraph)
-##     d = Dict{Symbol, Any}()
-##     for node in g.tape
-##         if node.op == :constant
-##             d[node.name] = node.val
-##         end
-##     end
-##     return d
-## end
-
-## """
-## Substitute all constants in adjoint dict with their corresponding values
-## """
-## function subs_constants!(adj::Dict{Symbol,Any}, st::Dict{Symbol,Any})
-##     st = constants(g)
-##     for i in eachindex(g.adj)
-##         g.adj[i] = subs(g.adj[i], st)
-##     end
-## end
 
 
 ## register rule
@@ -527,8 +530,15 @@ function main()
         D[j,i] = C[i,j]
     end
     # ex = :(A[i,k] * B[k,j])
-    g = ExGraph(; A=ones(1,1), B=ones(1,1))
+    # ex = :(B[i,j] = A[j,i])
+    A=rand(2,2)
+    B=rand(2,2)
+    g = ExGraph(; A=A, B=B)
     parse!(g, ex)
     evaluate!(g, :D)
     g
 end
+
+
+
+
