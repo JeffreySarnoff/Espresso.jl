@@ -65,6 +65,9 @@ function countdict{T}(a::AbstractArray{T})
 end
 
 
+unzip(coll) = map(collect, zip(coll...))
+
+
 ## package-specific stuff
 
 if VERSION < v"0.5-"

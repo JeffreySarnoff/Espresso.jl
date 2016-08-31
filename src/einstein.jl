@@ -1,11 +1,19 @@
 
 # einstein.jl - utils for working with expressions in Einstein notation
 
+function isindexed(ex)
+    if exprlike(ex)
+        return ex.head == :ref || any(isindexed, ex.args)
+    else
+        return false
+    end
+end
+
 
 """Transform expression into Einstein notation, infer types from vals"""
 to_einstein(ex::Expr, vals...) = to_einstein(to_excall(ex), vals...)
 
-function add_indexes(ex::Union{Expr, ExCall}, s2i::Dict{Symbol, Vector{Symbol}})
+function addindexes(ex, s2i::Dict)
     st = [(k => Expr(:ref, k, v...)) for (k, v) in s2i]
     return subs(ex, st)
 end
@@ -48,10 +56,10 @@ for op in [:+, :-, .+, .-, .*, ./]
 
 end
 
-"""Check if expression contains indexed elements, e.g. x[i]"""
-function is_indexed(ex)
-    return expr_like(ex) && (ex.head == :ref || any(is_indexed, ex.args))
-end
+## """Check if expression contains indexed elements, e.g. x[i]"""
+## function is_indexed(ex)
+##     return expr_like(ex) && (ex.head == :ref || any(is_indexed, ex.args))
+## end
 
 """Collect index names used in expression"""
 function collect_indexes!(idxs::Vector{Symbol}, ex)
@@ -72,6 +80,26 @@ function collect_indexes(ex)
     return idxs
 end
 
+
+function indexed_vars!(res::Vector{Expr}, ex)
+    if exprlike(ex)
+        if ex.head == :ref
+            push!(res, ex)
+        else
+            for arg in ex.args
+                indexed_vars!(res, arg)
+            end
+        end    
+    end
+end
+
+function indexed_vars(ex)
+    res = Array(Expr, 0)
+    indexed_vars!(res, ex)
+    return res
+end
+
+all_indexes(ex) = [ref.args[2:end] for ref in indexed_vars(ex)]
 
 
 function sum_indexes(ex::Expr)
@@ -102,3 +130,29 @@ end
 
 
 forall_indexes(ex::Expr) = forall_and_sum_indexes(ex)[1]
+
+
+
+function forall_indexes{T}(op::Symbolic, depidxs::Vector{Vector{T}})
+    if op == :*
+        counts = countdict(flatten(depidxs))
+        repeated = filter((idx, c) -> c == 1, counts)
+        return collect(Symbol, keys(repeated))
+    else
+        return unique(flatten(Symbol, depidxs))
+    end
+end
+
+function sum_indexes(op::Symbolic, depidxs::Vector{Vector})
+    if op == :*
+        counts = countdict(flatten(depidxs))
+        repeated = filter((idx, c) -> c > 1, counts)
+        return collect(Symbol, keys(repeated))
+    else
+        return unique(flatten(Symbol, depidxs))
+    end
+end
+
+
+
+

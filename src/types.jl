@@ -27,7 +27,7 @@ to_excall(ex::Expr) = ExCall{ex.args[1]}(ex.head, ex.args)
 to_expr(exc::ExCall) = Expr(exc.head, exc.args...)
 
 
-function expr_like(x)
+function exprlike(x)
     flds = Set(fieldnames(x))
     return in(:head, flds) && in(:args, flds)
 end
