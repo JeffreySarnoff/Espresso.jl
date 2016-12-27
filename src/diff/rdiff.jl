@@ -327,11 +327,11 @@ function main2()
 
 
     ex = quote
-        encodedInput = relu(We * input)
-        sum((input - encodedInput).^2)
+        y = exp(W * x)
+        sum((x - y).^2)
     end
-    inputs = [:We => rand(5, 5), :input => rand(5)]
-    ctx = Dict(:outfmt => :ein)
+    inputs = [:W => rand(5, 5), :x => rand(5)]
+    ctx = Dict()
     @time ds = rdiff(ex; ctx=ctx, inputs...)
 
 
@@ -341,7 +341,7 @@ function main2()
         z = v[i] * I[i]
     end
     inputs = [:W => rand(2, 2), :x => rand(2)]
-    ctx = Dict(:outfmt => :ein)
+    ctx = Dict()
     @time ds = rdiff(ex; ctx=ctx, inputs...)
 
 
