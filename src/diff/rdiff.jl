@@ -194,7 +194,7 @@ function reverse_pass(g::ExGraph, z::Symbol)
         guards = [:($ivar == $iwrt)
                   for (ivar, iwrt) in zip(dz.args[2:end], dzwrt.args[2:end])]
         g.ctx[:z_var] = z
-        adj = Dict(z => TensorDeriv(dz, dzwrt, 1., guards))        
+        adj = Dict(z => TensorDeriv(dz, dzwrt, 1., guards))
     else
         adj = Dict(z => Deriv(1.))
     end
@@ -205,11 +205,11 @@ function reverse_pass(g::ExGraph, z::Symbol)
 end
 
 
-function _rdiff(ex::Expr; ctx=Dict(), inputs...)    
+function _rdiff(ex::Expr; ctx=Dict(), inputs...)
     ctx = to_context(ctx)
     g = ExGraph(ex; ctx=ctx, inputs...)
     forward_pass(g)
-    z = g.tape[end].var    
+    z = g.tape[end].var
     adj = reverse_pass(g, z)
     return g, expand_adjoints(g, adj)
 end
@@ -349,6 +349,7 @@ function main2()
     ctx = Dict(:outfmt => :ein)
     inputs = [:W=>rand(3,4), :x=>rand(4), :b=>rand(3), :y=>rand(3)]
     ds = rdiff(ex; ctx=ctx, inputs...)
+
 
 
 end
