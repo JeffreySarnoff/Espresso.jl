@@ -100,6 +100,17 @@ Base.getindex(g::ExGraph, var::Symbol) = g.idx[var]
 Base.getindex(g::ExGraph, i::Integer) = g.tape[i]
 Base.endof(g::ExGraph) = endof(g.tape)
 
+function to_iexpr(g::ExGraph)
+    res = quote end
+    for nd in g.tape
+        if !isa(nd, ExNode{:input})
+            push!(res.args, to_iexpr(nd))
+        end
+    end
+    return res
+end
+
+
 """Extract symbols that may make conflicts with temporary names in ExGraph"""
 function possible_temp_names(ex::Expr)
     names = unique(flatten(map(possible_temp_names, ex.args)))
