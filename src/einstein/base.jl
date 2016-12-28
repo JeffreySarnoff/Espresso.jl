@@ -32,7 +32,7 @@ parse_indexed(var) = (var, Symbol[])
 
 function parse_indexed(ex::Expr)
     @assert ex.head == :ref
-    return convert(Symbol, ex.args[1]), convert(Vector{Symbol}, ex.args[2:end])    
+    return convert(Symbol, ex.args[1]), convert(Vector{Symbol}, ex.args[2:end])
 end
 
 
@@ -115,8 +115,8 @@ end
 
 # forall & sum indices rules:
 # 1. If there's LHS, everything on LHS is forall, everything else is sum
-# 2. If all index tuples are equal, it's elementwise op => all forall
-# 3. If all index tuples are equal or [], it's broadcasting => all forall
+# 2. If expression is multiplication (*, not .*), use standard Einstein rules
+# 3. If all index tuples are equal or [], it's elementwise or broadcasting => all forall
 # 4. Otherwise, all repeating indices are sum, all others - forall
 
 function longest_index(idxs_list::Vector{Vector{Symbol}})
@@ -124,34 +124,47 @@ function longest_index(idxs_list::Vector{Vector{Symbol}})
 end
 
 
+function repeated_non_repeated(depidxs::Vector)
+    counts = countdict(flatten(depidxs))
+    repeated = collect(Symbol, keys(filter((idx, c) -> c > 1, counts)))
+    non_repeated = collect(Symbol,
+                           keys(filter((idx, c) -> c == 1, counts)))
+    return repeated, non_repeated
+end
+
+
+function forall_sum_indices(op::Symbolic, depidxs::Vector)
+    longest_idx = longest_index(depidxs)
+    elem_wise = all(idx -> idx == longest_idx || isempty(idx), depidxs)
+    if op == :*
+        repeated, non_repeated = repeated_non_repeated(depidxs)
+        return non_repeated, repeated
+    elseif elem_wise
+        return longest_idx, Symbol[]
+    else    
+        return repeated_non_repeated(depidxs)
+    end
+end
+
+
 function forall_sum_indices(ex::Expr)
     if ex.head == :(=)
-        lhs_idxs = get_indices(ex.args[1])[1]
+        lhs_idxs_list = get_indices(ex.args[1])
+        lhs_idxs = !isempty(lhs_idxs_list) ? lhs_idxs_list[1] : Symbol[]
         rhs_idxs = flatten(Symbol, get_indices(ex.args[2]))
         sum_idxs = setdiff(rhs_idxs, lhs_idxs)
         return unique(lhs_idxs), sum_idxs
     else
-        idxs_list = get_indices(ex)
-        longest_idx = longest_index(idxs_list)
-        elem_wise = all(idx -> idx == longest_idx || isempty(idx), idxs_list)
-        if elem_wise
-            return longest_idx, Symbol[]
-        else
-            @assert ex.head == :call
-            op = ex.args[1]
-            counts = countdict(flatten(idxs_list))
-            repeated = collect(Symbol, keys(filter((idx, c) -> c > 1, counts)))
-            non_repeated = collect(Symbol,
-                                   keys(filter((idx, c) -> c == 1, counts)))
-            # wrong!
-            return op == :* ? (non_repeated, repeated) : (repeated, non_repeated)
-        end
+        @assert ex.head == :call
+        return forall_sum_indices(ex.args[1], get_indices(ex))
     end
 end
 
 forall_sum_indices(x) = (Symbol[], Symbol[])
 
+forall_indices(op::Symbolic, depidxs::Vector) = forall_sum_indices(op, depidxs)[1]
 forall_indices(x) = forall_sum_indices(x)[1]
+sum_indices(op::Symbolic, depidxs::Vector) = forall_sum_indices(op, depidxs)[2]
 sum_indices(x) = forall_sum_indices(x)[2]
 
 # function forall_indices{T}(op::Symbolic, depidxs::Vector{Vector{T}})
@@ -178,7 +191,7 @@ sum_indices(x) = forall_sum_indices(x)[2]
 
 # forall_indices(x) = Symbol[]
 
-# function sum_indices{T}(op::Symbolic, depidxs::Vector{Vector{T}})    
+# function sum_indices{T}(op::Symbolic, depidxs::Vector{Vector{T}})
 #     if op == :* || op == .*
 #         counts = countdict(flatten(depidxs))
 #         repeated = filter((idx, c) -> c > 1, counts)
@@ -249,11 +262,11 @@ end
 Translates guarded expression, e.g. :(Y[i,j] = X[i] * (i == j)),
 into the unguarded one, e.g. :(Y[i, i] = X[i])
 """
-function unguarded(ex::Expr)    
+function unguarded(ex::Expr)
     st = Dict([(grd.args[3], grd.args[2]) for grd in get_guards(ex)])
     new_ex = without_guards(ex)
     idxs = @view new_ex.args[1].args[2:end]
-    for i=1:length(idxs)        
+    for i=1:length(idxs)
         if haskey(st, idxs[i])
             idxs[i] = st[idxs[i]]
         end
@@ -268,6 +281,5 @@ function to_einsum(ex::Expr)
         @assert ex.head == :(=)
         uex = unguarded(ex)
         return :(@einsum $(uex.args[1]) := $(uex.args[2]))
-    end        
+    end
 end
-
