@@ -141,8 +141,9 @@ function forall_sum_indices(op::Symbolic, depidxs::Vector)
         return non_repeated, repeated
     elseif elem_wise
         return longest_idx, Symbol[]
-    else    
-        return repeated_non_repeated(depidxs)
+    else
+        return unique(flatten(Symbol, depidxs)), Symbol[]  # pass on all indices
+        # return repeated_non_repeated(depidxs)
     end
 end
 
